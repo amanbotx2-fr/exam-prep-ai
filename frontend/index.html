@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ExamAI — AI-Powered Exam Assistant</title>
+    <meta name="description"
+        content="Upload your PDF documents and ask questions using AI. ExamAI helps you prepare for exams with intelligent document analysis." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+    <!-- ===== NAVBAR ===== -->
+    <nav class="navbar" id="navbar">
+        <div class="navbar-left">
+            <svg class="navbar-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                <line x1="9" y1="7" x2="16" y2="7" />
+                <line x1="9" y1="11" x2="14" y2="11" />
+            </svg>
+            <span class="navbar-brand">ExamAI</span>
+        </div>
+        <div class="navbar-right">
+            <button class="btn-ghost" id="btn-new-session" title="Start a new session">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New Session
+            </button>
+            <div class="avatar" id="user-avatar" title="User">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                </svg>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ===== MAIN LAYOUT ===== -->
+    <main class="main-layout" id="main-layout">
+
+        <!-- LEFT PANEL — Upload / Document -->
+        <aside class="panel-left" id="panel-left">
+
+            <!-- Upload Zone (initial state) -->
+            <div class="upload-zone" id="upload-zone">
+                <div class="upload-zone-inner" id="upload-zone-inner">
+                    <div class="upload-icon-wrap">
+                        <svg class="upload-icon" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                            <line x1="9" y1="10" x2="15" y2="10" />
+                            <line x1="9" y1="14" x2="15" y2="14" />
+                            <line x1="9" y1="18" x2="12" y2="18" />
+                            <text x="10" y="7" font-size="5" fill="currentColor" stroke="none"
+                                font-weight="700">PDF</text>
+                        </svg>
+                    </div>
+                    <p class="upload-title">Drop your files here</p>
+                    <p class="upload-subtitle">PDF, DOCX, TXT, or images · Click to browse</p>
+                    <input type="file" id="file-input" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" multiple hidden />
+                </div>
+                <div class="upload-progress" id="upload-progress">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+            </div>
+
+            <!-- Document Card (post-upload state, hidden initially) -->
+            <div class="document-card hidden" id="document-card">
+                <div class="doc-preview">
+                    <svg class="doc-preview-icon" width="44" height="44" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                        <line x1="9" y1="10" x2="15" y2="10" />
+                        <line x1="9" y1="14" x2="15" y2="14" />
+                        <line x1="9" y1="18" x2="12" y2="18" />
+                        <text x="10" y="7" font-size="5" fill="currentColor" stroke="none" font-weight="700">PDF</text>
+                    </svg>
+                </div>
+                <div class="doc-info">
+                    <h2 class="doc-title" id="doc-title">Document Title</h2>
+                    <p class="doc-filename" id="doc-filename">filename.pdf</p>
+                    <div class="doc-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Processed</span>
+                        <span class="status-sep">·</span>
+                        <span class="status-ready">Ready</span>
+                    </div>
+                </div>
+
+                <div class="doc-stats">
+                    <div class="stat-card">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                            <line x1="9" y1="10" x2="15" y2="10" />
+                            <line x1="9" y1="14" x2="15" y2="14" />
+                        </svg>
+                        <span class="stat-value" id="stat-pages">—</span>
+                        <span class="stat-label">PAGES</span>
+                    </div>
+                    <div class="stat-card">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                        </svg>
+                        <span class="stat-value" id="stat-words">—</span>
+                        <span class="stat-label">WORDS</span>
+                    </div>
+                </div>
+
+                <!-- Extracted Topics -->
+                <div class="doc-topics hidden" id="doc-topics">
+                    <h3 class="section-heading">Key Concepts</h3>
+                    <div class="topics-list" id="topics-list"></div>
+                </div>
+            </div>
+
+            <!-- Recent Questions (shown after upload) -->
+            <div class="recent-questions hidden" id="recent-questions">
+                <h3 class="section-heading">Recent Questions</h3>
+                <ul class="recent-list" id="recent-list"></ul>
+            </div>
+
+        </aside>
+
+        <!-- VERTICAL DIVIDER -->
+        <div class="divider-v"></div>
+
+        <!-- RIGHT PANEL — Chat -->
+        <section class="panel-right" id="panel-right">
+
+            <!-- Chat Header with Mode Toggle -->
+            <div class="chat-header" id="chat-header">
+                <div class="mode-toggle" id="mode-toggle">
+                    <button class="mode-btn active" data-mode="qa" id="mode-qa">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                        </svg>
+                        Q&amp;A
+                    </button>
+                    <button class="mode-btn" data-mode="teach" id="mode-teach">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                        </svg>
+                        Teach
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Messages -->
+            <div class="chat-messages" id="chat-messages">
+                <div class="chat-empty" id="chat-empty">
+                    <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"
+                        stroke-linecap="round" stroke-linejoin="round" opacity="0.25">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                    <p class="empty-text">Upload a PDF to start asking questions</p>
+                </div>
+            </div>
+
+            <!-- Chat Input Bar -->
+            <div class="chat-input-bar" id="chat-input-bar">
+                <div class="input-wrapper">
+                    <input type="text" class="chat-input" id="chat-input" placeholder="Ask a follow-up question..."
+                        autocomplete="off" disabled />
+                    <button class="btn-send" id="btn-send" disabled title="Send message">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="19" x2="12" y2="5" />
+                            <polyline points="5 12 12 5 19 12" />
+                        </svg>
+                    </button>
+                </div>
+                <p class="disclaimer">AI can make mistakes. Verify important information.</p>
+            </div>
+
+        </section>
+
+    </main>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

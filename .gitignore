@@ -1,0 +1,66 @@
+# ===========================
+# ExamAI — .gitignore
+# ===========================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+env/
+.env/
+
+# Environment Variables / Secrets
+.env
+.env.local
+.env.production
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# FAISS (generated at runtime)
+*.faiss
+*.pkl
+
+# Temp files
+*.tmp
+*.temp
+*.log
+
+# Byte-compiled
+*.pyc
+*.pyo
+
+# Model cache (HuggingFace downloads)
+.cache/
+models/
+
+# Node (just in case)
+node_modules/
+
+# Gemini/Antigravity agent files
+.gemini/
+.agents/
