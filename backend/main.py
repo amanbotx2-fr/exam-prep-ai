@@ -1,19 +1,20 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import os
+import uuid
+import json
+import tempfile
+import re
+from typing import List
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from dotenv import load_dotenv
+
+import docx
+import fitz  # PyMuPDF
+from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.schema import Document
-
-from utils.file_processor import extract_text, SUPPORTED_EXTENSIONS
-import requests
-import tempfile
-import time
-import os
-from dotenv import load_dotenv
-from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
 
 load_dotenv()
 
@@ -26,378 +27,299 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------
-# GLOBAL VARIABLES
-# -------------------------
-
-vector_store = None
-sessions = {}
-
-# -------------------------
-# LOCAL EMBEDDINGS
-# -------------------------
+llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    api_key=os.environ.get("GROQ_API_KEY"),
+    temperature=0.3
+)
 
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-# -------------------------
-# SYSTEM PROMPTS
-# -------------------------
+sessions = {}
 
-TEACH_SYSTEM_PROMPT = """You are ExamAI — an elite exam preparation assistant.
-
-Your purpose is to help students score maximum marks in exams.
-
-For every topic:
-1. Give a structured, exam-oriented explanation.
-2. Clearly highlight important formulae.
-3. Provide step-by-step derivations if mathematical.
-4. Mention common mistakes students make.
-5. Add 2–3 exam-style questions at the end.
-6. Keep explanations concise but structured.
-7. Use headings and bullet points.
-8. Never respond casually.
-
-Force responses to follow this format exactly:
-### Concept Overview
-### Key Formulae
-### Important Derivation
-### Common Mistakes
-### Exam Practice Questions"""
-
-PRACTICE_SYSTEM_PROMPT = "Generate 5 exam-level problems on this topic with solutions. You are an elite exam preparation assistant."
-
-TEST_SYSTEM_PROMPT = "Generate a short timed test (5 questions) on this topic. Do NOT give solutions. Wait for user answers. You are an elite exam preparation assistant."
-
-
-# -------------------------
-# GROQ API
-# -------------------------
-
-llm = ChatGroq(
-    model="llama-3.1-8b-instant", # Keeping the fast instant model as before, but initialized with ChatGroq
-    api_key=os.environ.get("GROQ_API_KEY"),
-    temperature=0.3
-)
-
-def ask_groq(question: str, system_prompt: str = TEACH_SYSTEM_PROMPT):
-    try:
-        messages = [
-            ("system", system_prompt),
-            ("human", question),
-        ]
-        response = llm.invoke(messages)
-        return response.content
-    except Exception as e:
-        return f"Groq Exception: {str(e)}"
-
-
-# -------------------------
-# REQUEST MODEL
-# -------------------------
-
-class ChatRequest(BaseModel):
-    question: str
-    mode: Optional[str] = "teach"
-    session_id: Optional[str] = "default"
-
-
-# -------------------------
-# UPLOAD ENDPOINT
-# -------------------------
-
-@app.post("/upload")
-async def upload_files(files: List[UploadFile] = File(...)):
-    global vector_store
-
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided.")
-
-    combined_text = ""
-    tmp_paths = []
-    files_processed = 0
-    total_pages = 0
-
-    for file in files:
-        # Validate extension
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {ext}. Supported: {', '.join(SUPPORTED_EXTENSIONS)}",
-            )
-
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-            tmp_paths.append(tmp_path)
-
-        # Extract text
-        try:
-            text, page_count = extract_text(tmp_path)
-            if text.strip():
-                combined_text += text + "\n\n"
-                files_processed += 1
-                total_pages += page_count
-        except Exception as e:
-            # Clean up on error
-            for p in tmp_paths:
-                if os.path.exists(p):
-                    os.remove(p)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error processing {file.filename}: {str(e)}",
-            )
-
-    # Clean up temp files
-    for p in tmp_paths:
-        if os.path.exists(p):
-            os.remove(p)
-
-    if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="No text could be extracted from the uploaded files.")
-
-    # Split and embed text
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-    )
-
-    documents = [Document(page_content=combined_text)]
-    chunks = text_splitter.split_documents(documents)
-
-    vector_store = FAISS.from_documents(chunks, embeddings)
-
-    # Classification and Topic Extraction via Groq (non-blocking)
-    document_type = "other"
-    try:
-        # Step 1: Detect Document Type
-        classify_prompt = f"Classify this document as one of:\n1. syllabus\n2. lecture notes\n3. textbook\n4. other\n\nReturn only one word.\n\nText:\n{combined_text[:2000]}"
-        type_response = ask_groq(classify_prompt, system_prompt="You are a classifier. Respond with one word only.")
-        
-        lower_resp = type_response.lower()
-        if "syllabus" in lower_resp:
-            document_type = "syllabus"
-        elif "notes" in lower_resp or "lecture" in lower_resp:
-             document_type = "lecture notes"
-        elif "text" in lower_resp or "book" in lower_resp:
-             document_type = "textbook"
-
-        # Step 2: Extract structured topics if syllabus, else flat list
-        if document_type == "syllabus":
-             topic_prompt = f"Extract structured topics from this syllabus.\nReturn ONLY pure JSON in this format, nothing else:\n\n{{\n  \"Unit I\": [\"topic1\", \"topic2\"],\n  \"Unit II\": [\"topic1\", \"topic2\"]\n}}\n\nText:\n{combined_text[:10000]}"
-        else:
-             topic_prompt = f"Extract the main syllabus topics from this text as a JSON array of strings. Return ONLY the JSON array, nothing else.\n\nText:\n{combined_text[:10000]}"
-             
-        topic_response = ask_groq(topic_prompt)
-        import json, re
-        
-        try:
-            topics = json.loads(topic_response)
-        except json.JSONDecodeError:
-            match = re.search(r'(\{.*\}|\[.*\])', topic_response, re.DOTALL)
-            if match:
-                topics = json.loads(match.group())
-            else:
-                topics = {} if document_type == "syllabus" else []
-                
-        if document_type == "syllabus" and not isinstance(topics, dict):
-             topics = {}
-        elif document_type != "syllabus" and not isinstance(topics, list):
-             topics = []
-             
-        if document_type != "syllabus":
-             topics = [str(t).strip() for t in topics if str(t).strip()]
-             
-    except Exception as e:
-        print(f"[ERROR] Groq processing failed: {e}")
-        topics = {} if document_type == "syllabus" else []
-
-    # Inject parsed data into any existing active sessions as a convenience
-    for session_id in sessions:
-        sessions[session_id]["document_type"] = document_type
-        sessions[session_id]["syllabus_topics"] = topics if document_type == "syllabus" else {}
-
-    return {
-        "message": "Files processed successfully",
-        "files_processed": files_processed,
-        "pages": total_pages,
-        "topics": topics,
-        "document_type": document_type
-    }
-
-
-# -------------------------
-# CHAT ENDPOINT
-# -------------------------
-
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    session_id = request.session_id
+def get_session(session_id: str):
     if session_id not in sessions:
         sessions[session_id] = {
             "mode": "teach",
-            "current_topic": "general",
+            "test_active": False,
+            "questions": [],
+            "current_q": 0,
+            "score": 0,
             "weak_topics": {},
-            "total_questions": 0,
-            "correct_answers": 0,
-            "document_type": None,
-            "syllabus_topics": {}
+            "vectorstore": None,
+            "topic": "general"
         }
-    
-    session = sessions[session_id]
-    
-    # Mode handling
-    mode = request.mode if request.mode in ("teach", "practice", "test") else "teach"
-    session["mode"] = mode
-    print(f"[DEBUG] Groq {mode.upper()} mode")
-    endpoint_start = time.time()
+    return sessions[session_id]
 
-    user_message = request.question.strip()
+class ChatRequest(BaseModel):
+    message: str
+    mode: str
+    session_id: str
 
-    # Determine document context flag
-    document_uploaded = vector_store is not None
+def call_llm(prompt_messages):
+    print(f"[DEBUG] Groq CALL")
+    response = llm.invoke(prompt_messages)
+    return response.content
 
-    # Topic Locking & Extraction
-    extracted_topic = "general"
-    if session["current_topic"] is None or session["current_topic"] == "general":
-        words = user_message.split()
-        if words:
-            extracted_topic = " ".join(words[:4]).lower()
-            session["current_topic"] = extracted_topic
-        else:
-            session["current_topic"] = "general topic"
-    else:
-        # Still attempt to infer intent from early words for matching, 
-        # but keep core locked
-        words = user_message.split()
-        extracted_topic = " ".join(words[:4]).lower() if words else session["current_topic"]
+def validate_mcqs(questions: list, topic: str) -> bool:
+    if not isinstance(questions, list) or len(questions) != 5:
+        return False
+    topic_words = set(topic.lower().split())
+    for q in questions:
+        if not isinstance(q, dict):
+            return False
+        if "question" not in q or "options" not in q or "correct" not in q:
+            return False
+        if not isinstance(q["options"], dict):
+            return False
+        if q["correct"].lower() not in ["a", "b", "c", "d"]:
+            return False
+        combined = (q["question"] + " " + " ".join(q["options"].values())).lower()
+        if not any(w in combined for w in topic_words if len(w) > 3):
+            print(f"[TOPIC DRIFT] Question failed topic check: {q['question'][:80]}")
+            return False
+    return True
 
-    current_topic = session["current_topic"]
-    
-    # Syllabus Restricting Scope
-    if session.get("document_type") == "syllabus":
-        syllabus_topics = session.get("syllabus_topics", {})
-        
-        # Check if the extracted intent roughly exists in syllabus values
-        found_unit = None
-        topic_matches = False
-        
-        if syllabus_topics:
-            for unit, topics_list in syllabus_topics.items():
-                for t in topics_list:
-                    if str(t).lower() in extracted_topic or extracted_topic in str(t).lower():
-                        found_unit = unit
-                        topic_matches = True
-                        break
-                if topic_matches:
-                    break
-                    
-            if not topic_matches and extracted_topic != "general":
-                return {
-                     "answer": "This topic does not appear in your uploaded syllabus.",
-                     "mode": mode,
-                     "accuracy": session.get("accuracy", 0.0),
-                     "weak_topics": session["weak_topics"]
-                }
-        
-    # ----------------------------
-    # TEST MODE: Single Letter Answer Evaluator
-    # ----------------------------
-    if mode == "test" and user_message.upper() in ["A", "B", "C", "D"]:
-        session["total_questions"] += 1
-        
-        # We need the LLM to evaluate if the answer is correct based on the context of the running test
-        # We prompt it explicitly to act as an evaluator
-        eval_prompt = f"""You are grading a test on {current_topic}.
-The student answered: {user_message.upper()}
-Evaluate if this is correct. 
-Respond ONLY in this exact format:
-[CORRECT] or [INCORRECT]
-Explanation: <your brief explanation>"""
-        
-        eval_response = ask_groq(eval_prompt, system_prompt="You are an elite exam grader.")
-        
+def generate_mcqs(topic: str, context: str) -> list:
+    sys_prompt = (
+        f"You are a strict academic exam question generator.\n"
+        f"You MUST generate exactly 5 multiple-choice questions ONLY about: {topic}\n"
+        f"Every question MUST directly test conceptual or numerical understanding of {topic}.\n"
+        f"Do NOT generate questions about any other subject.\n"
+        f"Do NOT include explanations, markdown, or any text outside the JSON.\n"
+        f"Return ONLY a pure JSON array.\n"
+        f"Format:\n"
+        f'[{{"question":"...","options":{{"a":"...","b":"...","c":"...","d":"..."}},"correct":"a"}}]\n'
+    )
+    human_prompt = (
+        f"Generate 5 MCQs strictly about: {topic}\n"
+    )
+    if context:
+        human_prompt += f"Use this context as source material:\n{context}\n"
+
+    for attempt in range(3):
+        print(f"[DEBUG] MCQ generation attempt {attempt + 1} for topic: {topic}")
+        content = call_llm([("system", sys_prompt), ("human", human_prompt)])
         try:
-            if "[CORRECT]" in eval_response.upper():
-                session["correct_answers"] += 1
-                final_answer = eval_response
+            match = re.search(r'\[.*\]', content, re.DOTALL)
+            parsed = json.loads(match.group(0)) if match else json.loads(content)
+            if validate_mcqs(parsed, topic):
+                print(f"[DEBUG] MCQ generation succeeded on attempt {attempt + 1}")
+                return parsed
+            else:
+                print(f"[WARN] MCQ validation failed on attempt {attempt + 1}, retrying...")
+        except Exception as e:
+            print(f"[ERROR] MCQ parse failed on attempt {attempt + 1}: {e}")
+
+    print(f"[ERROR] All 3 MCQ generation attempts failed for topic: {topic}")
+    return []
+
+@app.post("/new-session")
+def create_session():
+    new_id = str(uuid.uuid4())
+    sessions[new_id] = {
+        "mode": "teach",
+        "test_active": False,
+        "questions": [],
+        "current_q": 0,
+        "score": 0,
+        "weak_topics": {},
+        "vectorstore": None,
+        "topic": "general"
+    }
+    return {"session_id": new_id}
+
+@app.post("/upload")
+async def upload_files(
+    files: List[UploadFile] = File(...),
+    session_id: str = Form(...)
+):
+    session = get_session(session_id)
+    combined_text = ""
+    
+    for file in files:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext == ".docx":
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(await file.read())
+                tmp_path = tmp.name
+            try:
+                doc = docx.Document(tmp_path)
+                text = "\n".join([para.text for para in doc.paragraphs])
+                combined_text += text + "\n\n"
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                    
+        elif ext == ".pdf":
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(await file.read())
+                tmp_path = tmp.name
+            try:
+                doc = fitz.open(tmp_path)
+                text = ""
+                for page in doc:
+                    text += page.get_text() + "\n"
+                combined_text += text + "\n\n"
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        else:
+            try:
+                content = await file.read()
+                combined_text += content.decode("utf-8", errors="ignore") + "\n\n"
+            except Exception:
+                pass
+
+    if not combined_text.strip():
+        raise HTTPException(status_code=400, detail="No readable text available.")
+        
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+    chunks = splitter.split_text(combined_text)
+    
+    if chunks:
+        vectorstore = FAISS.from_texts(chunks, embeddings)
+        session["vectorstore"] = vectorstore
+
+    return {"message": "Document processed and semantically indexed."}
+
+@app.post("/chat")
+async def chat(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+        
+    print(f"[DEBUG] RAW REQUEST BODY: {body}")
+        
+    # Safely extract fields
+    user_message = body.get("message") or body.get("text") or body.get("user_input") or ""
+    mode = body.get("mode") or body.get("currentMode") or "teach"
+    req_session_id = body.get("session_id") or body.get("sessionId")
+    
+    if not user_message:
+        return {"error": "Message is required"}
+        
+    if not req_session_id:
+        req_session_id = str(uuid.uuid4())
+        
+    session = get_session(req_session_id)
+    user_message = user_message.strip()
+    
+    if session["topic"] == "general" and len(user_message.split()) > 0:
+        session["topic"] = user_message[:100]
+
+    current_topic = session["topic"]
+
+    if mode == "test":
+        if not session["test_active"]:
+            session["mode"] = "test"
+            session["test_active"] = True
+            
+            context_str = ""
+            if session["vectorstore"]:
+                docs = session["vectorstore"].similarity_search(current_topic, k=3)
+                context_str = "\n".join(d.page_content for d in docs)
+                
+            questions = generate_mcqs(current_topic, context_str)
+            if not questions:
+                session["test_active"] = False
+                session["mode"] = "teach"
+                return {
+                    "answer": "Failed to generate test. Returning to teach mode.",
+                    "mode": "teach",
+                }
+            
+            session["questions"] = questions
+            session["current_q"] = 0
+            session["score"] = 0
+            
+            q = questions[0]
+            q_text = f"**Test Started for {current_topic}**\n\nQuestion 1:\n{q['question']}\n\nA) {q['options'].get('a','')}\nB) {q['options'].get('b','')}\nC) {q['options'].get('c','')}\nD) {q['options'].get('d','')}"
+            
+            return {
+                "answer": q_text,
+                "mode": "test"
+            }
+        else:
+            user_ans = user_message.lower()
+            if len(user_ans) > 1 or user_ans not in ["a", "b", "c", "d"]:
+                return {
+                    "answer": "You are currently in Test mode. Please answer with a, b, c, or d.",
+                    "mode": "test"
+                }
+
+            idx = session["current_q"]
+            q = session["questions"][idx]
+            correct_ans = str(q.get("correct", "a")).lower()
+            
+            status = "correct" if user_ans == correct_ans else "incorrect"
+
+            if status == "correct":
+                session["score"] += 1
+                feedback = f"**Correct!** The answer is {correct_ans.upper()}.\n\n"
             else:
                 session["weak_topics"][current_topic] = session["weak_topics"].get(current_topic, 0) + 1
-                final_answer = eval_response
-        except Exception:
-             final_answer = eval_response
-             
-        accuracy = session["correct_answers"] / session["total_questions"] if session["total_questions"] > 0 else 0.0
-        return {
-            "answer": final_answer,
-            "mode": mode,
-            "accuracy": round(accuracy, 2),
-            "weak_topics": session["weak_topics"]
-        }
+                feedback = f"**Incorrect.** The correct answer is {correct_ans.upper()}.\n\n"
+                
+            session["current_q"] += 1
+            
+            if session["current_q"] >= len(session["questions"]):
+                total = len(session["questions"])
+                score = session["score"]
+                session["mode"] = "teach"
+                session["test_active"] = False
+                session["questions"] = []
+                session["current_q"] = 0
+                return {
+                    "status": status,
+                    "answer": feedback + f"**Test Completed!**\nYour score: {score}/{total}\nReturning to teach mode.",
+                    "mode": "teach"
+                }
+            else:
+                next_idx = session["current_q"]
+                next_q = session["questions"][next_idx]
+                q_text = f"Question {next_idx + 1}:\n{next_q['question']}\n\nA) {next_q['options'].get('a','')}\nB) {next_q['options'].get('b','')}\nC) {next_q['options'].get('c','')}\nD) {next_q['options'].get('d','')}"
+                return {
+                    "status": status,
+                    "next_question": f"Question {next_idx + 1}",
+                    "answer": feedback + q_text,
+                    "mode": "test"
+                }
 
-    # Determine system prompt based on mode
-    system_prompt = TEACH_SYSTEM_PROMPT
-    if mode == "practice":
-        system_prompt = PRACTICE_SYSTEM_PROMPT
-    elif mode == "test":
-        system_prompt = TEST_SYSTEM_PROMPT
-
-    # 1. Inject strict topic locking lock
-    topic_lock = f"\n\nYou are currently teaching/testing ONLY the topic: {current_topic}.\nDo NOT change subject.\nDo NOT introduce new topics.\nIf user response is a single letter, interpret it as an answer to the current question."
-    system_prompt += topic_lock
-    
-    # 2. Inject weakness into system prompt
-    if session["weak_topics"].get(current_topic, 0) >= 2:
-        weakness_injection = f"\nStudent is struggling with {current_topic}. Focus on fundamentals and clarify misconceptions."
-        system_prompt += weakness_injection
+    elif mode in ["teach", "practice"]:
+        session["mode"] = mode
+        session["test_active"] = False
         
-    # 3. Inject document context control
-    if document_uploaded:
-        if session.get("document_type") == "syllabus":
-             if syllabus_topics and not any(syllabus_topics.values()):
-                  doc_context = "\nAccording to the uploaded syllabus (which has no explanations), use your general knowledge but frame the answer strictly inside the syllabus structure."
-             else:
-                  unit_str = f" This topic belongs to {found_unit}." if 'found_unit' in locals() and found_unit else ""
-                  doc_context = f"\nTeach strictly within the scope of the uploaded syllabus.{unit_str} Do not introduce unrelated topics."
-        else:
-             doc_context = "\nUse uploaded document as primary source. Do not introduce unrelated content."
-        system_prompt += doc_context
-    else:
-        doc_no_context = "\nAnswer based purely on your knowledge. No document was uploaded."
-        system_prompt += doc_no_context
-
-    # ----------------------------
-    # FUTURE RAG LOGIC (Bypassed)
-    # ----------------------------
-    # if rag_enabled and vector_store is not None:
-    #     pass  # RAG invocation goes here when enabled in the future
-
-    # Generate test only if mode is test AND it's not just a single letter answering a previous question
-    # (Since single letter is caught above, we are generating the test here)
-    if mode == "test" and "test" not in user_message.lower() and "quiz" not in user_message.lower() and len(user_message.split()) < 3:
-         return {"answer": "Say 'generate test' or 'start quiz' to begin the test.", "mode": mode, "accuracy": 0.0, "weak_topics": session["weak_topics"]}
-
-    try:
-        answer = ask_groq(user_message, system_prompt=system_prompt)
+        context_str = ""
+        if session["vectorstore"]:
+            docs = session["vectorstore"].similarity_search(user_message, k=3)
+            context_str = "\n".join(d.page_content for d in docs)
+            
+        sys_prompt = f"Current Mode: {mode.upper()}\nCurrent Topic: {current_topic}\n"
+        sys_prompt += "Instruction: You are ExamAI, a strict and intelligent backend. You cannot change the topic or mode. If in test mode, you must not generate new content or evaluate MCQs.\n"
         
-        # Fail Safe: Verify LLM stayed on topic
-        if current_topic.lower() not in answer.lower() and len(answer.split()) > 20:
-             # Basic safety net check - if the topic word isn't in the reply and it's a long reply, it might have drifted
-             pass 
-
-        total_time = time.time() - endpoint_start
-        print(f"[DEBUG] Groq response time: {total_time:.3f} sec")
-        
-        accuracy = session["correct_answers"] / session["total_questions"] if session["total_questions"] > 0 else 0.0
-        
+        if context_str:
+            sys_prompt += f"Use ONLY the provided context from uploaded document.\n<context>\n{context_str}\n</context>\n"
+            
+        if session["weak_topics"].get(current_topic, 0) >= 2:
+            sys_prompt += "Student has shown weakness in this topic. Reinforce fundamentals clearly.\n"
+            
+        if mode == "teach":
+            sys_prompt += "Teach the subject carefully. Use markdown headers, bolding, and bullet points."
+        elif mode == "practice":
+            sys_prompt += "Generate 5 practice problems (not a test) with step-by-step solutions formatted clearly in markdown."
+            
+        try:
+            answer = call_llm([("system", sys_prompt), ("human", user_message)])
+        except Exception as e:
+            answer = f"Error communicating with LLM: {str(e)}"
+            
         return {
             "answer": answer,
-            "mode": mode,
-            "accuracy": round(accuracy, 2),
-            "weak_topics": session["weak_topics"]
+            "mode": session["mode"]
         }
-    except Exception as e:
-        return {"error": f"Groq API failed: {str(e)}"}
+    
+    return {"answer": "Invalid mode specified.", "mode": mode}

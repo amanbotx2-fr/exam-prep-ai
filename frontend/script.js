@@ -33,10 +33,27 @@
     const modeTestBtn = document.getElementById('mode-test');
 
     // ── State ──
-    let isDocumentReady = true;  // Chat always enabled (Gemini-only mode)
+    let isDocumentReady = true;
     let isSending = false;
     let currentMode = 'teach';
+    let currentSessionId = null;
     const recentQs = [];
+
+    async function initializeSession() {
+        try {
+            const res = await fetch(`${API_BASE}/new-session`, { method: 'POST' });
+            const data = await res.json();
+            currentSessionId = data.session_id;
+            localStorage.setItem('examai_session_id', currentSessionId);
+            console.log('[SESSION] Initialized:', currentSessionId);
+        } catch (err) {
+            currentSessionId = 'fallback-' + Date.now();
+            localStorage.setItem('examai_session_id', currentSessionId);
+            console.warn('[SESSION] Backend unreachable, using fallback:', currentSessionId);
+        }
+    }
+
+    let sessionReady = initializeSession();
 
 
     // ============================================
@@ -126,6 +143,7 @@
         for (const f of files) {
             formData.append('files', f);
         }
+        formData.append('session_id', currentSessionId);
 
         try {
             const res = await fetch(`${API_BASE}/upload`, {
@@ -225,6 +243,7 @@
 
 
     async function sendMessage() {
+        await sessionReady;
         const text = chatInput.value.trim();
         if (!text || isSending) return;
 
@@ -251,7 +270,7 @@
             const res = await fetch(`${API_BASE}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: text, mode: currentMode }),
+                body: JSON.stringify({ message: text, mode: currentMode, session_id: currentSessionId }),
             });
 
             const data = await res.json();
@@ -419,20 +438,20 @@
     // NEW SESSION
     // ============================================
 
-    btnNewSession.addEventListener('click', () => {
-        // Reset state
-        isDocumentReady = true;  // Keep chat always enabled
+    btnNewSession.addEventListener('click', async () => {
+        sessionReady = initializeSession();
+        await sessionReady;
+
+        isDocumentReady = true;
         isSending = false;
         recentQs.length = 0;
         lastTimestamp = 0;
 
-        // Reset mode toggle
         currentMode = 'teach';
         modeTeachBtn.classList.add('active');
         modePracticeBtn.classList.remove('active');
         modeTestBtn.classList.remove('active');
 
-        // Reset upload zone
         uploadZone.classList.remove('hidden', 'uploading');
         progressBar.style.width = '0%';
         fileInput.value = '';
@@ -440,7 +459,6 @@
         docTopics.classList.add('hidden');
         topicsList.innerHTML = '';
 
-        // Reset chat
         chatMessages.innerHTML = '';
         const emptyState = document.createElement('div');
         emptyState.className = 'chat-empty';
@@ -453,13 +471,11 @@
     `;
         chatMessages.appendChild(emptyState);
 
-        // Reset input
         chatInput.disabled = false;
         chatInput.value = '';
         chatInput.placeholder = 'Ask anything...';
         btnSend.disabled = true;
 
-        // Reset recent questions
         recentQuestions.classList.add('hidden');
         recentList.innerHTML = '';
     });
