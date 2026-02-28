@@ -11,6 +11,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="style.css" />
+
+    <!-- Markdown & Sanitization -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+
+    <!-- KaTeX for Math Rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 </head>
 
 <body>
@@ -143,20 +152,29 @@
             <!-- Chat Header with Mode Toggle -->
             <div class="chat-header" id="chat-header">
                 <div class="mode-toggle" id="mode-toggle">
-                    <button class="mode-btn active" data-mode="qa" id="mode-qa">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                        </svg>
-                        Q&amp;A
-                    </button>
-                    <button class="mode-btn" data-mode="teach" id="mode-teach">
+                    <button class="mode-btn active" data-mode="teach" id="mode-teach">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
                             <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
                         </svg>
                         Teach
+                    </button>
+                    <button class="mode-btn" data-mode="practice" id="mode-practice">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                        </svg>
+                        Practice
+                    </button>
+                    <button class="mode-btn" data-mode="test" id="mode-test">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                        Test
                     </button>
                 </div>
             </div>
@@ -168,16 +186,16 @@
                         stroke-linecap="round" stroke-linejoin="round" opacity="0.25">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
-                    <p class="empty-text">Upload a PDF to start asking questions</p>
+                    <p class="empty-text">Ask anything, or upload a file for contextual answers</p>
                 </div>
             </div>
 
             <!-- Chat Input Bar -->
             <div class="chat-input-bar" id="chat-input-bar">
                 <div class="input-wrapper">
-                    <input type="text" class="chat-input" id="chat-input" placeholder="Ask a follow-up question..."
-                        autocomplete="off" disabled />
-                    <button class="btn-send" id="btn-send" disabled title="Send message">
+                    <input type="text" class="chat-input" id="chat-input" placeholder="Ask anything..."
+                        autocomplete="off" />
+                    <button class="btn-send" id="btn-send" title="Send message">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="12" y1="19" x2="12" y2="5" />

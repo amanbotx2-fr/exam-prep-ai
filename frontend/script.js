@@ -28,13 +28,14 @@
     const btnSend = document.getElementById('btn-send');
     const btnNewSession = document.getElementById('btn-new-session');
     const modeToggle = document.getElementById('mode-toggle');
-    const modeQaBtn = document.getElementById('mode-qa');
     const modeTeachBtn = document.getElementById('mode-teach');
+    const modePracticeBtn = document.getElementById('mode-practice');
+    const modeTestBtn = document.getElementById('mode-test');
 
     // ── State ──
-    let isDocumentReady = false;
+    let isDocumentReady = true;  // Chat always enabled (Gemini-only mode)
     let isSending = false;
-    let currentMode = 'qa';
+    let currentMode = 'teach';
     const recentQs = [];
 
 
@@ -49,8 +50,9 @@
         if (mode === currentMode) return;
 
         currentMode = mode;
-        modeQaBtn.classList.toggle('active', mode === 'qa');
         modeTeachBtn.classList.toggle('active', mode === 'teach');
+        modePracticeBtn.classList.toggle('active', mode === 'practice');
+        modeTestBtn.classList.toggle('active', mode === 'test');
     });
 
 
@@ -158,11 +160,10 @@
                 docFilename.textContent = files.map((f) => f.name).join(', ');
             }
 
-            // Estimate pages and words (heuristic from combined file size)
-            const totalSizeKB = files.reduce((sum, f) => sum + f.size, 0) / 1024;
-            const estimatedPages = Math.max(1, Math.round(totalSizeKB / 50));
-            const estimatedWords = Math.round(estimatedPages * 500);
-            statPages.textContent = estimatedPages;
+            // Use real page count from backend, with word estimate
+            const realPages = data.pages || Math.max(1, Math.round(files.reduce((s, f) => s + f.size, 0) / 1024 / 50));
+            const estimatedWords = Math.round(realPages * 300);
+            statPages.textContent = realPages;
             statWords.textContent = estimatedWords.toLocaleString();
 
             // Switch to document card
@@ -216,16 +217,16 @@
     // Send on button click
     btnSend.addEventListener('click', sendMessage);
 
-    // Toggle send button
+    // Toggle send button strictly based on input text and sending state
     chatInput.addEventListener('input', () => {
         const hasText = chatInput.value.trim().length > 0;
-        btnSend.disabled = !(hasText && isDocumentReady && !isSending);
+        btnSend.disabled = !(hasText && !isSending);
     });
 
 
     async function sendMessage() {
         const text = chatInput.value.trim();
-        if (!text || !isDocumentReady || isSending) return;
+        if (!text || isSending) return;
 
         isSending = true;
         btnSend.disabled = true;
@@ -294,7 +295,7 @@
                 ? `<div class="message-label">ExamAI <span class="online-dot"></span></div>`
                 : '';
 
-        const renderedText = role === 'ai' ? renderMarkdown(text) : escapeHTML(text);
+        const renderedText = role === 'ai' ? DOMPurify.sanitize(marked.parse(text)) : escapeHTML(text);
 
         row.innerHTML = `
       <div class="message-avatar">${avatarSvg}</div>
@@ -305,6 +306,20 @@
     `;
 
         chatMessages.appendChild(row);
+
+        // Render LaTeX math using KaTeX (after DOM insertion)
+        if (typeof renderMathInElement === 'function') {
+            renderMathInElement(row, {
+                delimiters: [
+                    { left: "$$", right: "$$", display: true },
+                    { left: "\\[", right: "\\]", display: true },
+                    { left: "$", right: "$", display: false },
+                    { left: "\\(", right: "\\)", display: false }
+                ],
+                throwOnError: false
+            });
+        }
+
         scrollToBottom();
     }
 
@@ -406,15 +421,16 @@
 
     btnNewSession.addEventListener('click', () => {
         // Reset state
-        isDocumentReady = false;
+        isDocumentReady = true;  // Keep chat always enabled
         isSending = false;
         recentQs.length = 0;
         lastTimestamp = 0;
 
         // Reset mode toggle
-        currentMode = 'qa';
-        modeQaBtn.classList.add('active');
-        modeTeachBtn.classList.remove('active');
+        currentMode = 'teach';
+        modeTeachBtn.classList.add('active');
+        modePracticeBtn.classList.remove('active');
+        modeTestBtn.classList.remove('active');
 
         // Reset upload zone
         uploadZone.classList.remove('hidden', 'uploading');
@@ -433,14 +449,14 @@
       <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.25">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
       </svg>
-      <p class="empty-text">Upload a PDF to start asking questions</p>
+      <p class="empty-text">Ask anything, or upload a file for contextual answers</p>
     `;
         chatMessages.appendChild(emptyState);
 
         // Reset input
-        chatInput.disabled = true;
+        chatInput.disabled = false;
         chatInput.value = '';
-        chatInput.placeholder = 'Ask a follow-up question...';
+        chatInput.placeholder = 'Ask anything...';
         btnSend.disabled = true;
 
         // Reset recent questions
@@ -465,53 +481,7 @@
         return div.innerHTML;
     }
 
-    function renderMarkdown(text) {
-        // Simple markdown → HTML for teach mode responses
-        let html = escapeHTML(text);
-
-        // Headings: ## Heading
-        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-
-        // Bold: **text**
-        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-
-        // Italic: *text*
-        html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-
-        // Inline code: `code`
-        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-        // Unordered list items: - item
-        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-
-        // Ordered list items: 1. item
-        html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-
-        // Wrap consecutive <li> in <ul>
-        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-        // Paragraphs: wrap remaining lines in <p> (skip empty, headings, lists)
-        html = html
-            .split('\n')
-            .map((line) => {
-                const trimmed = line.trim();
-                if (
-                    !trimmed ||
-                    trimmed.startsWith('<h2') ||
-                    trimmed.startsWith('<ul') ||
-                    trimmed.startsWith('<li') ||
-                    trimmed.startsWith('</ul') ||
-                    trimmed.startsWith('<ol') ||
-                    trimmed.startsWith('</ol')
-                ) {
-                    return line;
-                }
-                return `<p>${line}</p>`;
-            })
-            .join('\n');
-
-        return html;
-    }
+    // (Custom renderMarkdown removed in favor of marked.js)
 
     function truncate(str, len) {
         return str.length > len ? str.slice(0, len) + '…' : str;
