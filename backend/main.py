@@ -63,10 +63,9 @@ def call_llm(prompt_messages):
     response = llm.invoke(prompt_messages)
     return response.content
 
-def validate_mcqs(questions: list, topic: str) -> bool:
+def validate_mcq_structure(questions: list) -> bool:
     if not isinstance(questions, list) or len(questions) != 5:
         return False
-    topic_words = set(topic.lower().split())
     for q in questions:
         if not isinstance(q, dict):
             return False
@@ -74,12 +73,23 @@ def validate_mcqs(questions: list, topic: str) -> bool:
             return False
         if not isinstance(q["options"], dict):
             return False
-        if q["correct"].lower() not in ["a", "b", "c", "d"]:
+        if str(q["correct"]).lower() not in ["a", "b", "c", "d"]:
             return False
-        combined = (q["question"] + " " + " ".join(q["options"].values())).lower()
-        if not any(w in combined for w in topic_words if len(w) > 3):
-            print(f"[TOPIC DRIFT] Question failed topic check: {q['question'][:80]}")
-            return False
+    return True
+
+def validate_mcq_relevance(questions: list, topic: str) -> bool:
+    topic_keywords = [w.lower() for w in topic.split() if len(w) > 2]
+    if not topic_keywords:
+        return True
+    all_text = ""
+    for q in questions:
+        all_text += q["question"] + " " + " ".join(q["options"].values()) + " "
+    all_text = all_text.lower()
+    matches = sum(1 for kw in topic_keywords if kw in all_text)
+    ratio = matches / len(topic_keywords)
+    if ratio < 0.3:
+        print(f"[TOPIC DRIFT] Only {matches}/{len(topic_keywords)} topic keywords found across all questions")
+        return False
     return True
 
 def generate_mcqs(topic: str, context: str) -> list:
@@ -99,21 +109,31 @@ def generate_mcqs(topic: str, context: str) -> list:
     if context:
         human_prompt += f"Use this context as source material:\n{context}\n"
 
+    best_result = []
+
     for attempt in range(3):
         print(f"[DEBUG] MCQ generation attempt {attempt + 1} for topic: {topic}")
         content = call_llm([("system", sys_prompt), ("human", human_prompt)])
         try:
             match = re.search(r'\[.*\]', content, re.DOTALL)
             parsed = json.loads(match.group(0)) if match else json.loads(content)
-            if validate_mcqs(parsed, topic):
-                print(f"[DEBUG] MCQ generation succeeded on attempt {attempt + 1}")
-                return parsed
+            if validate_mcq_structure(parsed):
+                best_result = parsed
+                if validate_mcq_relevance(parsed, topic):
+                    print(f"[DEBUG] MCQ generation succeeded on attempt {attempt + 1}")
+                    return parsed
+                else:
+                    print(f"[WARN] MCQ relevance check failed on attempt {attempt + 1}, retrying...")
             else:
-                print(f"[WARN] MCQ validation failed on attempt {attempt + 1}, retrying...")
+                print(f"[WARN] MCQ structure invalid on attempt {attempt + 1}, retrying...")
         except Exception as e:
             print(f"[ERROR] MCQ parse failed on attempt {attempt + 1}: {e}")
 
-    print(f"[ERROR] All 3 MCQ generation attempts failed for topic: {topic}")
+    if best_result:
+        print(f"[WARN] Returning best-effort MCQs for topic: {topic}")
+        return best_result
+
+    print(f"[ERROR] All MCQ generation attempts failed for topic: {topic}")
     return []
 
 @app.post("/new-session")

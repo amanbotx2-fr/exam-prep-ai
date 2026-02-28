@@ -1,0 +1,19 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-dotenv>=1.0.1
+python-multipart>=0.0.20
+pydantic>=2.10.0
+
+# LLM
+langchain-groq>=0.2.4
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.2
+
+# Embeddings & Vector Store
+sentence-transformers>=3.4.0
+faiss-cpu>=1.10.0
+
+# Document Parsing
+python-docx>=1.2.0
+PyMuPDF>=1.26.0
