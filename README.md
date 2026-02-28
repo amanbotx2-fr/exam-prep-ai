@@ -223,18 +223,6 @@ Open `http://localhost:5500` in your browser.
 
 ---
 
-## 📝 License
-
-This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
-
----
-
 ## 🏷️ Repository Tags
 
 `ai` `exam-preparation` `fastapi` `rag` `faiss` `groq` `llama` `mcq-generator` `study-assistant` `langchain` `hackathon` `education` `nlp`
-
----
-
-<p align="center">
-  Built with ❤️ for the <strong>AMD Slingshot Hackathon</strong>
-</p>
